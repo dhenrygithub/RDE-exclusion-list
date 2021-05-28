@@ -2,10 +2,11 @@
 
 """ iphandler.py: reporting matching IP addresses between the two files."""
 
-import ipaddress
+import ipaddress 
 from pprint import pprint
 from tabulate import tabulate
 import pandas
+
 import csv
 from copy import deepcopy
 import logging
@@ -14,8 +15,9 @@ import sys
 
 IP_NETWORK_TYPE = type(ipaddress.ip_network('0.0.0.0/0'))
 IP_ADDRESS_TYPE = type(ipaddress.ip_address('0.0.0.0'))
-CANDIDATE_FILE = 'candidates-2021-03-08.csv'
+CANDIDATE_FILE = 'candidates-2021-ACAS-CRED.csv'
 DATABASE_FILE = 'database.csv'
+DATABASE_OUT_FILE = 'database_out.csv'
 
 
 def toIPAddress(addrStr):
@@ -279,22 +281,32 @@ def readCandidates_csv():
 
         data = csv.DictReader(candidate_file, delimiter=',')
         line_count = 0
+        candidate_duplicates = 0
 
         for row in data:
             line_count += 1
             candidate = {
                 'num': line_count,
-                'site': row['site'],
+                'site': row['Repository'],
                 'IPtype': 'IPAddress',
-                'string': row['IP'],
-                'IP': toIPAddress(row['IP']),
+                'string': row['IP Address'],
+                'IP': toIPAddress(row['IP Address']),
+                'DNS': row['DNS Name'],
+                'NetBIOS': row['NetBIOS Name'],
                 'host_count': 1,
                 'valid': True
             }
-            candidates.append(candidate)
+
+            # insert candidate into list if not already in the list, and count duplicates if found
+            if not [existing for existing in candidates if existing['IP'] == candidate['IP']]:
+                candidates.append(candidate)
+            else:
+                candidate_duplicates += 1
+
     print('\nNumber of lines in candidates file :', line_count)
-    print("Number of hosts in candidates:", sum(entry['host_count'] for entry in candidates), '\n')
-    print(tabulate(candidates, tablefmt='psql'))
+    print("Number of hosts in candidates:", sum(entry['host_count'] for entry in candidates))
+    print("Number of duplicate candidates:", candidate_duplicates, '\n')
+#    print(tabulate(candidates, tablefmt='psql'))
 
 #    total_records = candidates_df.groupby(['site']).count()
 
@@ -313,20 +325,56 @@ def lookForCandidatesInDatabase(listCand, listData):
                 if data['valid']:
                     if data['IPtype'] == 'IPAddress':
                         if cand['IP'] == data['IP']:
-                            print(data['group'], "found", cand['num'], ":", cand['IP'], "matched IP", data['IP'], "!")
+                            print(data['group'], "found at site:", cand['site'], ":", cand['IP'], "matched excluded IP", data['IP'])
                             match_count += 1
                     elif data['IPtype'] == 'IPNetwork':
                         if cand['IP'] in data['IPNetwork']:
-                            print(data['group'], "found", cand['num'], ":", cand['IP'], "in network", data['IPNetwork'], "!")
+                            print(data['group'], "found at site:", cand['site'], ":", cand['IP'], "in excluded network", data['IPNetwork'])
                             match_count += 1
                     else:
                         if data['IPStart'] <= cand['IP'] <= data['IPEnd']:
-                            print(data['group'], "found", cand['num'], ":", cand['IP'], "in IP range", data['string'], "!")
+                            print(data['group'], "found at site:", cand['site'], ":", cand['IP'], "in excluded IP range", data['string'])
                             match_count += 1
     print("\n", match_count, "matches found.")
 
+def writeDatabase_csv(listData):
+    with open(DATABASE_OUT_FILE, 'w', newline='') as database_out_file:
+        # Open CSV
+        #analyze_output_file = open(output_name, mode='a')
+        # create the csv writer object
+        database_out_writer = csv.writer(database_out_file, delimiter=',', quotechar='"',
+                                        quoting=csv.QUOTE_MINIMAL)
+        # Write Header Rows
+        database_out_writer.writerow(["IP Address",
+                            "Host Name/DNS",
+                            "Device Type/Model",
+                            "Operating System",
+                            "Reason for Exclusion",
+                            "Repository",
+                            "Confirmed",
+                            "Entry Type",
+                            "Original Se#"
+                            ])
+					
+
+        for entry in listData:
+            # create the csv writer object
+            if entry['IPtype'] == 'IPAddress':
+                database_out_writer.writerow(
+                    [entry['IP'], '', entry['group'], '', entry['group'], '', '', f"Single IP Address", entry['num']])
+            elif entry['IPtype'] == 'IPNetwork':
+                for dataIP in entry['IPNetwork']:
+                    database_out_writer.writerow(
+                        [dataIP, '', entry['group'], '', entry['group'], '', '', f"IP Network {entry['string']}", entry['num']])
+            else: # IP range
+                for dataIP in range(int(entry['IPStart']), int(entry['IPEnd'])):
+                    database_out_writer.writerow(
+                        [dataIP, '', entry['group'], '', entry['group'], '', '', f"IP Range {entry['string']}", entry['num']])
+
+        database_out_file.close()
 
 if __name__ == '__main__':  # pragma: nocover
     candidates = readCandidates_csv()
     database = readDatabase()
     lookForCandidatesInDatabase(candidates, database)
+    writeDatabase_csv(database)
